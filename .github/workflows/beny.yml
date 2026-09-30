@@ -1,0 +1,238 @@
+name: Beny NG Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: AndroidLibXrayLite/go.mod
+
+      - name: Build Xray core (libv2ray.aar)
+        run: |
+          set -e
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          cd AndroidLibXrayLite
+          gomobile init
+          go mod tidy -v
+          gomobile bind -v -androidapi 24 -trimpath -ldflags='-s -w -buildid=' ./
+          mkdir -p ../V2rayNG/app/libs
+          cp libv2ray.aar ../V2rayNG/app/libs/
+
+      - name: Build tun2socks (hev-socks5-tunnel)
+        run: |
+          set -e
+          export NDK_HOME="$ANDROID_NDK_HOME"
+          export PATH="$PATH:$ANDROID_NDK_HOME"
+          bash compile-hevtun.sh
+          mkdir -p V2rayNG/app/libs
+          if [ -d libs ]; then cp -r libs/. V2rayNG/app/libs/; fi
+
+      - name: Apply Beny NG name and glass look
+        run: |
+          set -e
+          D=V2rayNG/app/src/debug
+          mkdir -p $D/java/ir/beny/ng
+
+          cat > $D/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools">
+              <application android:label="Beny NG" tools:replace="android:label">
+                  <provider
+                      android:name="ir.beny.ng.BenyGlassProvider"
+                      android:authorities="${applicationId}.beny.glass"
+                      android:exported="false"
+                      android:initOrder="100" />
+              </application>
+          </manifest>
+          EOF
+
+          cat > $D/java/ir/beny/ng/BenyGlass.kt <<'EOF'
+          package ir.beny.ng
+
+          import android.app.Activity
+          import android.app.Application
+          import android.content.ContentProvider
+          import android.content.ContentValues
+          import android.content.res.Configuration
+          import android.database.Cursor
+          import android.graphics.Color
+          import android.graphics.drawable.ColorDrawable
+          import android.graphics.drawable.Drawable
+          import android.graphics.drawable.GradientDrawable
+          import android.graphics.drawable.LayerDrawable
+          import android.net.Uri
+          import android.os.Bundle
+          import android.view.View
+          import android.view.ViewGroup
+          import java.util.WeakHashMap
+
+          class BenyGlassProvider : ContentProvider() {
+              override fun onCreate(): Boolean {
+                  (context?.applicationContext as? Application)?.registerActivityLifecycleCallbacks(BenyGlass)
+                  return true
+              }
+              override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = null
+              override fun getType(uri: Uri): String? = null
+              override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+              override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
+              override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+          }
+
+          object BenyGlass : Application.ActivityLifecycleCallbacks {
+              private val done = WeakHashMap<View, Boolean>()
+              private val hooked = WeakHashMap<Activity, Boolean>()
+
+              override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+              override fun onActivityStarted(activity: Activity) {}
+              override fun onActivityResumed(activity: Activity) { skin(activity) }
+              override fun onActivityPaused(activity: Activity) {}
+              override fun onActivityStopped(activity: Activity) {}
+              override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+              override fun onActivityDestroyed(activity: Activity) {}
+
+              private fun skin(a: Activity) {
+                  try {
+                      val night = (a.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                      val dm = a.resources.displayMetrics
+                      val d = dm.density
+                      a.window.setBackgroundDrawable(background(night, dm.widthPixels))
+                      val decor = a.window.decorView
+                      val run = Runnable { glassify(decor, night, d) }
+                      if (hooked.put(a, true) == null) {
+                          decor.viewTreeObserver.addOnGlobalLayoutListener {
+                              decor.removeCallbacks(run)
+                              decor.postDelayed(run, 80)
+                          }
+                      }
+                      decor.post(run)
+                  } catch (e: Throwable) {
+                  }
+              }
+
+              private fun blob(color: Int, cx: Float, cy: Float, r: Float): Drawable {
+                  val g = GradientDrawable()
+                  g.setGradientType(GradientDrawable.RADIAL_GRADIENT)
+                  g.setGradientRadius(r)
+                  g.setGradientCenter(cx, cy)
+                  g.setColors(intArrayOf(color, Color.TRANSPARENT))
+                  return g
+              }
+
+              private fun background(night: Boolean, w: Int): Drawable {
+                  val colors = if (night)
+                      intArrayOf(0xFF0B1020.toInt(), 0xFF1B1446.toInt(), 0xFF0F2A4A.toInt())
+                  else
+                      intArrayOf(0xFFDCE7FF.toInt(), 0xFFEBDDFF.toInt(), 0xFFD5F3F6.toInt())
+                  val base = GradientDrawable(GradientDrawable.Orientation.TL_BR, colors)
+                  val a = if (night) 0x66 else 0x77
+                  val r = w * 0.9f
+                  return LayerDrawable(arrayOf<Drawable>(
+                      base,
+                      blob(Color.argb(a, 124, 92, 255), 0.15f, 0.12f, r),
+                      blob(Color.argb(a, 0, 200, 255), 0.90f, 0.55f, r),
+                      blob(Color.argb(a, 255, 92, 180), 0.20f, 0.95f, r * 0.9f)
+                  ))
+              }
+
+              private fun isOpaque(d: Drawable?): Boolean =
+                  d is ColorDrawable && Color.alpha(d.color) == 255
+
+              private fun glassify(v: View, night: Boolean, d: Float) {
+                  if (v is ViewGroup) {
+                      for (i in 0 until v.childCount) glassify(v.getChildAt(i), night, d)
+                  }
+                  if (done.containsKey(v)) return
+                  val cn = v.javaClass.name
+                  val fill = if (night) Color.argb(0x1F, 255, 255, 255) else Color.argb(0x8C, 255, 255, 255)
+                  val edge = if (night) Color.argb(0x40, 255, 255, 255) else Color.argb(0xB0, 255, 255, 255)
+                  val parent = v.parent
+                  when {
+                      cn.endsWith("CardView") -> {
+                          card(v, fill, edge, d)
+                          done[v] = true
+                      }
+                      cn.contains("AppBarLayout") || cn.endsWith("Toolbar") -> {
+                          v.setBackgroundColor(fill)
+                          v.stateListAnimator = null
+                          done[v] = true
+                      }
+                      parent != null && parent.javaClass.name.contains("RecyclerView") -> {
+                          item(v, fill, edge, d)
+                          done[v] = true
+                      }
+                      v is ViewGroup && isOpaque(v.background) -> {
+                          v.setBackgroundColor(Color.TRANSPARENT)
+                          done[v] = true
+                      }
+                  }
+              }
+
+              private fun item(v: View, fill: Int, edge: Int, d: Float) {
+                  val glass = GradientDrawable()
+                  glass.setColor(fill)
+                  glass.setCornerRadius(16 * d)
+                  glass.setStroke(maxOf(1, d.toInt()), edge)
+                  val old = v.background
+                  v.background = if (old == null || isOpaque(old)) glass
+                  else LayerDrawable(arrayOf<Drawable>(glass, old))
+                  val lp = v.layoutParams
+                  if (lp is ViewGroup.MarginLayoutParams && lp.leftMargin == 0 && lp.topMargin == 0) {
+                      lp.setMargins((8 * d).toInt(), (4 * d).toInt(), (8 * d).toInt(), (4 * d).toInt())
+                      v.layoutParams = lp
+                  }
+              }
+
+              private fun card(v: View, fill: Int, edge: Int, d: Float) {
+                  val i = Int::class.javaPrimitiveType!!
+                  val f = Float::class.javaPrimitiveType!!
+                  call(v, "setCardBackgroundColor", i, fill)
+                  call(v, "setCardElevation", f, 0f)
+                  call(v, "setRadius", f, 18 * d)
+                  call(v, "setStrokeColor", i, edge)
+                  call(v, "setStrokeWidth", i, maxOf(1, d.toInt()))
+              }
+
+              private fun call(v: Any, name: String, type: Class<*>, arg: Any) {
+                  try {
+                      v.javaClass.getMethod(name, type).invoke(v, arg)
+                  } catch (e: Throwable) {
+                  }
+              }
+          }
+          EOF
+
+          cat > "$GITHUB_WORKSPACE/beny.init.gradle" <<'EOF'
+          allprojects {
+              pluginManager.withPlugin("com.android.application") {
+                  extensions.getByName("android").buildTypes.getByName("debug").applicationIdSuffix = ".beny"
+              }
+          }
+          EOF
+
+      - name: Build APK
+        working-directory: V2rayNG
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --init-script "$GITHUB_WORKSPACE/beny.init.gradle"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BenyNG-apk
+          path: V2rayNG/app/build/outputs/apk/**/*.apk
