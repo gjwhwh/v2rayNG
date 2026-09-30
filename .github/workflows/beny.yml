@@ -11,263 +11,155 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v7
-      with:
-        submodules: 'recursive'
-        fetch-depth: '0'
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v4
-      with:
-        log-accepted-android-sdk-licenses: false
-        cmdline-tools-version: '14742923'
-        packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
+          cmdline-tools-version: "14742923"
+          packages: |
+            platforms;android-37
+            build-tools;37.0.0
+            platform-tools
 
-    - name: Install NDK
-      run: |
-        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-          --channel=0 \
-          --install "ndk;29.0.14206865"
-        echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> $GITHUB_ENV
-        sed -i '10i\
-        \
-            ndkVersion = "29.0.14206865"' ${{ github.workspace }}/V2rayNG/app/build.gradle.kts
+      - name: Install NDK
+        shell: bash
+        run: |
+          set -e
 
-    - name: Restore cached libhevtun
-      id: cache-libhevtun-restore
-      uses: actions/cache/restore@v6
-      with:
-        path: ${{ github.workspace }}/libs
-        key: libhevtun-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('.git/modules/hev-socks5-tunnel/HEAD') }}-${{ hashFiles('compile-hevtun.sh') }}
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            --channel=0 \
+            "ndk;29.0.14206865"
 
-    - name: Build libhevtun
-      if: steps.cache-libhevtun-restore.outputs.cache-hit != 'true'
-      run: |
-        bash compile-hevtun.sh
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
 
-    - name: Save libhevtun
-      if: steps.cache-libhevtun-restore.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v6
-      with:
-        path: ${{ github.workspace }}/libs
-        key: libhevtun-${{ runner.os }}-${{ env.NDK_HOME }}-${{ hashFiles('.git/modules/hev-socks5-tunnel/HEAD') }}-${{ hashFiles('compile-hevtun.sh') }}
+      - name: Build libhevtun
+        shell: bash
+        run: |
+          set -e
+          bash compile-hevtun.sh
 
-    - name: Copy libhevtun
-      run: |
-        cp -r ${{ github.workspace }}/libs ${{ github.workspace }}/V2rayNG/app
+      - name: Copy libhevtun
+        shell: bash
+        run: |
+          set -e
+          mkdir -p V2rayNG/app/libs
+          cp -r libs/* V2rayNG/app/libs/
 
-    - name: Fetch AndroidLibXrayLite tag
-      run: |
-        pushd AndroidLibXrayLite
-        CURRENT_TAG=$(git describe --tags --abbrev=0)
-        echo "Current tag in this repo: $CURRENT_TAG"
-        echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
-        popd
+      - name: Fetch AndroidLibXrayLite tag
+        shell: bash
+        run: |
+          set -e
 
-    - name: Download libv2ray
-      uses: robinraju/release-downloader@v1.13
-      with:
-        repository: '2dust/AndroidLibXrayLite'
-        tag: ${{ env.CURRENT_TAG }}
-        fileName: 'libv2ray.aar'
-        out-file-path: V2rayNG/app/libs/
+          cd AndroidLibXrayLite
 
-    - name: Setup Java
-      uses: actions/setup-java@v6.0.1
-      with:
-        distribution: 'temurin'
-        java-version: '21'
+          CURRENT_TAG=$(git describe --tags --abbrev=0)
 
-    - name: Apply Beny NG name and glass look
-      run: |
-        set -e
-        D=V2rayNG/app/src/debug
-        mkdir -p $D/java/ir/beny/ng
-        cat > $D/AndroidManifest.xml <<'EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-            xmlns:tools="http://schemas.android.com/tools">
-            <application android:label="Beny NG" tools:replace="android:label">
-                <provider
-                    android:name="ir.beny.ng.BenyGlassProvider"
-                    android:authorities="${applicationId}.beny.glass"
-                    android:exported="false"
-                    android:initOrder="100" />
-            </application>
-        </manifest>
-        EOF
-        cat > $D/java/ir/beny/ng/BenyGlass.kt <<'EOF'
-        package ir.beny.ng
+          echo "Current AndroidLibXrayLite tag: $CURRENT_TAG"
+          echo "CURRENT_TAG=$CURRENT_TAG" >> "$GITHUB_ENV"
 
-        import android.app.Activity
-        import android.app.Application
-        import android.content.ContentProvider
-        import android.content.ContentValues
-        import android.content.res.Configuration
-        import android.database.Cursor
-        import android.graphics.Color
-        import android.graphics.drawable.ColorDrawable
-        import android.graphics.drawable.Drawable
-        import android.graphics.drawable.GradientDrawable
-        import android.graphics.drawable.LayerDrawable
-        import android.net.Uri
-        import android.os.Bundle
-        import android.view.View
-        import android.view.ViewGroup
-        import java.util.WeakHashMap
+      - name: Download libv2ray
+        uses: robinraju/release-downloader@v1.13
+        with:
+          repository: "2dust/AndroidLibXrayLite"
+          tag: ${{ env.CURRENT_TAG }}
+          fileName: "libv2ray.aar"
+          out-file-path: "V2rayNG/app/libs"
 
-        class BenyGlassProvider : ContentProvider() {
-            override fun onCreate(): Boolean {
-                (context?.applicationContext as? Application)?.registerActivityLifecycleCallbacks(BenyGlass)
-                return true
-            }
-            override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = null
-            override fun getType(uri: Uri): String? = null
-            override fun insert(uri: Uri, values: ContentValues?): Uri? = null
-            override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
-            override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
-        }
+      - name: Setup Java
+        uses: actions/setup-java@v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
 
-        object BenyGlass : Application.ActivityLifecycleCallbacks {
-            private val done = WeakHashMap<View, Boolean>()
-            private val hooked = WeakHashMap<Activity, Boolean>()
+      - name: Apply Beny NG name and glass look
+        shell: bash
+        run: |
+          set -e
 
-            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
-            override fun onActivityStarted(activity: Activity) {}
-            override fun onActivityResumed(activity: Activity) { skin(activity) }
-            override fun onActivityPaused(activity: Activity) {}
-            override fun onActivityStopped(activity: Activity) {}
-            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
-            override fun onActivityDestroyed(activity: Activity) {}
+          D="V2rayNG/app/src/debug"
 
-            private fun skin(a: Activity) {
-                try {
-                    val night = (a.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-                    val dm = a.resources.displayMetrics
-                    val d = dm.density
-                    a.window.setBackgroundDrawable(background(night, dm.widthPixels))
-                    val decor = a.window.decorView
-                    val run = Runnable { glassify(decor, night, d) }
-                    if (hooked.put(a, true) == null) {
-                        decor.viewTreeObserver.addOnGlobalLayoutListener {
-                            decor.removeCallbacks(run)
-                            decor.postDelayed(run, 80)
-                        }
-                    }
-                    decor.post(run)
-                } catch (e: Throwable) {
-                }
-            }
+          mkdir -p "$D/java/ir/beny/ng"
 
-            private fun blob(color: Int, cx: Float, cy: Float, r: Float): Drawable {
-                val g = GradientDrawable()
-                g.setGradientType(GradientDrawable.RADIAL_GRADIENT)
-                g.setGradientRadius(r)
-                g.setGradientCenter(cx, cy)
-                g.setColors(intArrayOf(color, Color.TRANSPARENT))
-                return g
-            }
+          cat > "$D/AndroidManifest.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools">
 
-            private fun background(night: Boolean, w: Int): Drawable {
-                val colors = if (night)
-                    intArrayOf(0xFF0B1020.toInt(), 0xFF1B1446.toInt(), 0xFF0F2A4A.toInt())
-                else
-                    intArrayOf(0xFFDCE7FF.toInt(), 0xFFEBDDFF.toInt(), 0xFFD5F3F6.toInt())
-                val base = GradientDrawable(GradientDrawable.Orientation.TL_BR, colors)
-                val a = if (night) 0x66 else 0x77
-                val r = w * 0.9f
-                return LayerDrawable(arrayOf<Drawable>(
-                    base,
-                    blob(Color.argb(a, 124, 92, 255), 0.15f, 0.12f, r),
-                    blob(Color.argb(a, 0, 200, 255), 0.90f, 0.55f, r),
-                    blob(Color.argb(a, 255, 92, 180), 0.20f, 0.95f, r * 0.9f)
-                ))
-            }
+              <application
+                  android:label="Beny NG"
+                  tools:replace="android:label">
 
-            private fun isOpaque(d: Drawable?): Boolean =
-                d is ColorDrawable && Color.alpha(d.color) == 255
+                  <provider
+                      android:name="ir.beny.ng.BenyGlassProvider"
+                      android:authorities="${applicationId}.beny.glass"
+                      android:exported="false"
+                      android:initOrder="100" />
 
-            private fun glassify(v: View, night: Boolean, d: Float) {
-                if (v is ViewGroup) {
-                    for (i in 0 until v.childCount) glassify(v.getChildAt(i), night, d)
-                }
-                if (done.containsKey(v)) return
-                val cn = v.javaClass.name
-                val fill = if (night) Color.argb(0x1F, 255, 255, 255) else Color.argb(0x8C, 255, 255, 255)
-                val edge = if (night) Color.argb(0x40, 255, 255, 255) else Color.argb(0xB0, 255, 255, 255)
-                val parent = v.parent
-                when {
-                    cn.endsWith("CardView") -> {
-                        card(v, fill, edge, d)
-                        done[v] = true
-                    }
-                    cn.contains("AppBarLayout") || cn.endsWith("Toolbar") -> {
-                        v.setBackgroundColor(fill)
-                        v.stateListAnimator = null
-                        done[v] = true
-                    }
-                    parent != null && parent.javaClass.name.contains("RecyclerView") -> {
-                        item(v, fill, edge, d)
-                        done[v] = true
-                    }
-                    v is ViewGroup && isOpaque(v.background) -> {
-                        v.setBackgroundColor(Color.TRANSPARENT)
-                        done[v] = true
-                    }
-                }
-            }
+              </application>
 
-            private fun item(v: View, fill: Int, edge: Int, d: Float) {
-                val glass = GradientDrawable()
-                glass.setColor(fill)
-                glass.setCornerRadius(16 * d)
-                glass.setStroke(maxOf(1, d.toInt()), edge)
-                val old = v.background
-                v.background = if (old == null || isOpaque(old)) glass
-                else LayerDrawable(arrayOf<Drawable>(glass, old))
-                val lp = v.layoutParams
-                if (lp is ViewGroup.MarginLayoutParams && lp.leftMargin == 0 && lp.topMargin == 0) {
-                    lp.setMargins((8 * d).toInt(), (4 * d).toInt(), (8 * d).toInt(), (4 * d).toInt())
-                    v.layoutParams = lp
-                }
-            }
+          </manifest>
+          EOF
 
-            private fun card(v: View, fill: Int, edge: Int, d: Float) {
-                val i = Int::class.javaPrimitiveType!!
-                val f = Float::class.javaPrimitiveType!!
-                call(v, "setCardBackgroundColor", i, fill)
-                call(v, "setCardElevation", f, 0f)
-                call(v, "setRadius", f, 18 * d)
-                call(v, "setStrokeColor", i, edge)
-                call(v, "setStrokeWidth", i, maxOf(1, d.toInt()))
-            }
+          cat > "$D/java/ir/beny/ng/BenyGlass.kt" <<'EOF'
+          package ir.beny.ng
 
-            private fun call(v: Any, name: String, type: Class<*>, arg: Any) {
-                try {
-                    v.javaClass.getMethod(name, type).invoke(v, arg)
-                } catch (e: Throwable) {
-                }
-            }
-        }
-        EOF
-        cat > "$GITHUB_WORKSPACE/beny.init.gradle" <<'EOF'
-        allprojects {
-            pluginManager.withPlugin("com.android.application") {
-                extensions.getByName("android").buildTypes.getByName("debug").applicationIdSuffix = ".beny"
-            }
-        }
-        EOF
+          import android.app.Activity
+          import android.app.Application
+          import android.content.ContentProvider
+          import android.content.ContentValues
+          import android.content.res.Configuration
+          import android.database.Cursor
+          import android.graphics.Color
+          import android.graphics.drawable.ColorDrawable
+          import android.graphics.drawable.Drawable
+          import android.graphics.drawable.GradientDrawable
+          import android.graphics.drawable.LayerDrawable
+          import android.net.Uri
+          import android.os.Bundle
+          import android.view.View
+          import android.view.ViewGroup
+          import java.util.WeakHashMap
 
-    - name: Build APK
-      run: |
-        cd ${{ github.workspace }}/V2rayNG
-        echo "sdk.dir=${ANDROID_HOME}" > local.properties
-        chmod 755 gradlew
-        ./gradlew assembleFdroidDebug --init-script "$GITHUB_WORKSPACE/beny.init.gradle"
+          class BenyGlassProvider : ContentProvider() {
 
-    - name: Upload APKs
-      uses: actions/upload-artifact@v7
-      with:
-        name: BenyNG-apk
-        path: ${{ github.workspace }}/V2rayNG/app/build/outputs/apk/*/debug/*.apk
+              override fun onCreate(): Boolean {
+                  (context?.applicationContext as? Application)
+                      ?.registerActivityLifecycleCallbacks(BenyGlass)
+
+                  return true
+              }
+
+              override fun query(
+                  uri: Uri,
+                  projection: Array<out String>?,
+                  selection: String?,
+                  selectionArgs: Array<out String>?,
+                  sortOrder: String?
+              ): Cursor? = null
+
+              override fun getType(uri: Uri): String? = null
+
+              override fun insert(
+                  uri: Uri,
+                  values: ContentValues?
+              ): Uri? = null
+
+              override fun delete(
+                  uri: Uri,
+                  selection: String?,
+                  selectionArgs: Array<out String>?
+              ): Int = 0
+
+              override fun update(
+                  uri: Uri,
+                  values: ContentValues?,
+                  selection: String?,
+                 
